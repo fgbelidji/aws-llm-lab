@@ -125,7 +125,6 @@ def write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False))
             handle.write("\n")
 
-
 def build_document_markdown(
     image: "Image.Image",
     response_text: str,

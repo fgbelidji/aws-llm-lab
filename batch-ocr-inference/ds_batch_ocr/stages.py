@@ -32,64 +32,6 @@ LOGGER = logging.getLogger(__name__)
 
 DATASET_FILENAME = "dataset.jsonl"
 
-
-def write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False))
-            handle.write("\n")
-
-
-def append_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
-    if not rows:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False))
-            handle.write("\n")
-
-
-def read_jsonl(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
-        return []
-    data: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            data.append(json.loads(line))
-    return data
-
-
-def iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
-    if not path.exists():
-        return []
-
-    def _generator() -> Iterable[Dict[str, Any]]:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                yield json.loads(line)
-
-    return _generator()
-
-
-def write_jsonl_iter(path: Path, rows: Iterable[Dict[str, Any]]) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False))
-            handle.write("\n")
-            count += 1
-    return count
-
-
 def _dataset_features() -> Features:
     return Features(
         {
@@ -112,7 +54,6 @@ def _dataset_path(base_dir: Path) -> Path:
     return base_dir / DATASET_FILENAME
 
 
-
 def _build_dataset_records_iter(documents: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
     for doc in documents:
         document_with_boxes_path = doc.get("document_with_boxes_path") 
@@ -131,7 +72,7 @@ def _build_dataset_records_iter(documents: Iterable[Dict[str, Any]]) -> Iterable
             "document_final_markdown_text": doc.get("document_final_markdown_text") or "",
             "raw_response_path": str(doc.get("raw_response_path") or ""),
         }
-
+        
 
 def _build_dataset_records(documents: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(_build_dataset_records_iter(documents))
@@ -208,7 +149,7 @@ def run_stage_extract(settings: ExtractSettings) -> None:
         sample_iterator = iter(dataset)
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
-
+    # Create folder to save batches infered from model
     documents_batches_dir = settings.output_dir / "document_batches"
     if documents_batches_dir.exists():
         shutil.rmtree(documents_batches_dir)
@@ -294,7 +235,12 @@ def run_stage_extract(settings: ExtractSettings) -> None:
                 #write document with boxes image to file
                 img_draw.save(ctx["sample_dir"] / "document_with_boxes.png")
                 
-        
+                document_path = document_path.relative_to(settings.output_dir)
+                raw_response_path = raw_response_path.relative_to(settings.output_dir)
+                source_image_path = (ctx["sample_dir"] / "source.png").relative_to(settings.output_dir)
+                document_with_boxes_path = (ctx["sample_dir"] /  "document_with_boxes.png").relative_to(settings.output_dir)
+                
+                
                 
                 #build document metadata
                 batch_document_dicts.append(
@@ -303,8 +249,8 @@ def run_stage_extract(settings: ExtractSettings) -> None:
                         "dataset_index": int(ctx["dataset_index"]),
                         "document_path": str(document_path),
                         "raw_response_path": str(raw_response_path),
-                        "source_image_path": str(ctx["sample_dir"] / "source.png"),
-                        "document_with_boxes_path": str(ctx["sample_dir"] / "document_with_boxes.png"),
+                        "source_image_path": str(source_image_path),
+                        "document_with_boxes_path": str(document_with_boxes_path),
                         "document_markdown_text": str(markdown),
                         "extracted_figures": [str(figure.image_path) for figure in figures],
                         "extracted_figures_metadata": [asdict(figure) for figure in figures],
@@ -422,24 +368,16 @@ def run_stage_extract(settings: ExtractSettings) -> None:
     extract_commit = settings.upload_commit_message
     if settings.upload_repo_id and not extract_commit:
         extract_commit = f"Upload extract stage outputs {__now_iso()}"
-    # def iter_documents_from_batches(files: Iterable[Path]) -> Iterable[Dict[str, Any]]:
-    #     for file_path in files:
-    #         try:
-    #             batch_data = json.loads(file_path.read_text(encoding="utf-8"))
-    #         except Exception as exc:  # pragma: no cover - defensive logging
-    #             LOGGER.warning("Failed to read documents batch %s: %s", file_path, exc)
-    #             continue
-    #         yield from batch_data
 
-    #documents_iter_for_push = iter_documents_from_batches(document_batch_files)
-    #dataset_records_iter = _build_dataset_records_iter(documents_iter_for_push)
-    LOGGER.info(document_batch_files)
-    _push_dataset_records(
-        records_files=document_batch_files,
-        output_dir=settings.output_dir,
-        repo_id=settings.upload_repo_id,
-        commit_message=extract_commit,
-        revision=settings.upload_revision,
+
+    dataset = load_dataset("json", data_files=document_batch_files)
+
+    token = os.environ.get("HF_TOKEN", None)
+    dataset.push_to_hub(
+        repo_id=repo_id,
+        token=token,
+        revision=revision,
+        commit_message=commit_message or "Update dataset records",
     )
     maybe_upload_dataset(
         output_dir=settings.output_dir,
