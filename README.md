@@ -1,1 +1,1 @@
-# aws-llm-lab
+# llm-lab
